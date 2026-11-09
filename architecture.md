@@ -38,6 +38,58 @@ videoconvert ! video/x-raw,format=I420,width=800,height=450,framerate=10/1
                             artifacts/recording.mkv               127.0.0.1:5123
 ```
 
+Same structure as a Mermaid diagram (rendered by GitHub):
+
+```mermaid
+flowchart LR
+    SRC["videotestsrc<br/>video_source<br/>smpte, is-live"] --> CAPS1["capsfilter<br/>800x450 @ 10/1"]
+    CAPS1 --> CONV["videoconvert<br/>source_convert"]
+    CONV --> NAMES["textoverlay<br/>names_overlay<br/>(top-center)"]
+    NAMES --> TIME["timeoverlay<br/>time_overlay<br/>res/fps + elapsed"]
+    TIME --> CAPS2["videoconvert + capsfilter<br/>I420 800x450 10/1"]
+    CAPS2 --> TEE{{"tee<br/>split"}}
+
+    subgraph A["Branch A - preview"]
+        QA["queue preview_queue<br/>leaky, 5 buf"] --> VCA["videoconvert"] --> SA["autovideosink<br/>(fakesink if --headless)"]
+    end
+    subgraph B["Branch B - recording"]
+        QB["queue record_queue<br/>3 s, not leaky"] --> EB["x264enc<br/>record_encoder"] --> PB["h264parse<br/>record_parser"] --> MB["matroskamux<br/>record_muxer"] --> FB["filesink<br/>recording.mkv"]
+    end
+    subgraph C["Branch C - RTP/UDP"]
+        QC["queue network_queue<br/>leaky, 10 buf"] --> EC["x264enc<br/>network_encoder<br/>1000 kbit/s"] --> CC["capsfilter<br/>profile=baseline"] --> PC["rtph264pay<br/>pt=96"] --> UC["udpsink<br/>127.0.0.1:5123"]
+    end
+
+    TEE --> QA
+    TEE --> QB
+    TEE --> QC
+```
+
+### Pipeline graph from the real pipeline
+
+![sender pipeline graph](evidence/pipeline.png)
+
+`evidence/pipeline.png` is generated from the running sender, not drawn by hand:
+
+```bash
+./scripts/make-graph.sh
+```
+
+The script runs `scripts/sender.sh --headless --duration 4` with
+`GST_DEBUG_DUMP_DOT_DIR` set, keeps the `*PAUSED_PLAYING.dot` file (at this point all
+caps are negotiated, so the graph shows the real caps on every link) and converts it
+with `dot -Tpng`. The raw `.dot` is kept next to it in `evidence/pipeline.dot`.
+
+What we checked on the graph:
+* `split` has three source pads `src_0`, `src_1`, `src_2`, each followed by its own queue;
+* the link before the tee carries `video/x-raw, format=I420, width=800, height=450, framerate=10/1`;
+* in the recording branch the H.264 caps are `stream-format=avc, alignment=au` already at
+  the output of `record_encoder`: the caps negotiation propagated the `avc` requirement of
+  `matroskamux` up to `x264enc`, so there is no `byte-stream` link in the graph (see
+  section 5 for what the parser still does);
+* after `network_payloader` the caps are `application/x-rtp, media=video, clock-rate=90000,
+  encoding-name=H264, payload=96, packetization-mode=1` - these are the caps the receiver
+  has to recreate by hand (section 7).
+
 Receiver (`scripts/receiver.sh`):
 
 ```
@@ -77,6 +129,23 @@ We fix `I420` before the tee so the format is known and the same for all branche
 accepted directly by `x264enc` and `jpegenc`, so the encoding branches do not need their
 own conversion.
 
+### Transmission and recording parameters
+
+| | Network (branch C) | Recording (branch B) |
+|---|---|---|
+| Codec | H.264 (`x264enc`, `tune=zerolatency`, `speed-preset=ultrafast`, constrained-baseline, 1000 kbit/s, keyframe every 10 frames = 1 s) | H.264 (`x264enc`, `speed-preset=ultrafast`, keyframe every 20 frames = 2 s) |
+| Packaging | RTP, `rtph264pay`, dynamic payload type **96**, clock-rate 90000, packetization-mode 1, SPS/PPS re-sent every 1 s | container **Matroska** (`matroskamux`), file `.mkv` |
+| Destination | UDP `127.0.0.1`, port **5123** (`udpsink`) | `artifacts/recording.mkv` (or `--output`), `artifacts/test-recording.mkv` in `verify.sh` |
+
+All these values come from `config/team.conf`; with `NETWORK_CODEC=jpeg` the network
+branch becomes `jpegenc ! rtpjpegpay` (static payload type 26), with `CONTAINER=mpegts`
+the recording uses `mpegtsmux` and `.ts`.
+
+Why two separate encoders instead of one encoder before the tee: the two uses have
+different needs (network: low latency, constant bitrate, short GOP for fast recovery;
+recording: quality per byte, longer GOP). The cost is encoding twice; at 800x450 / 10 fps
+with `ultrafast` this is cheap.
+
 ## 4. Raw video vs compressed video
 
 * **Raw** (`video/x-raw`): from `videotestsrc` to the tee, the whole preview branch,
@@ -108,11 +177,16 @@ that the datagrams contain RTP, which codec, which clock rate or payload type. W
 negotiate and the pipeline fails with a `not-negotiated` error. (With RTSP/SDP this
 information would come from the signalling, here there is none.)
 
-**Parser (`h264parse`).** In the recording branch it converts the x264 output from
-`byte-stream` to the `avc` format that `matroskamux` wants, builds the `codec_data`
-(SPS/PPS) for the file header and marks keyframes so the muxer can write the index
-(cues) for seeking. On the receiver/playback side it makes sure the decoder gets
-complete access units with the right caps.
+**Parser (`h264parse`).** A parser reads the H.264 bitstream and describes it in the
+caps (profile, level, resolution, `parsed=true`), checks that buffers are complete
+access units and flags keyframes. In the recording branch, the pipeline graph shows that
+`x264enc` already outputs `avc` because `matroskamux` asked for it, so here the parser
+does not convert anything; it is kept because it guarantees the muxer gets parsed,
+correctly flagged access units whatever the encoder (e.g. if we switch to `openh264enc`
+or a hardware encoder that only outputs `byte-stream`, `h264parse` does the
+byte-stream -> avc conversion and builds the `codec_data`). On the receiver and
+playback side, `h264parse` sits between the depayloader/demuxer and `avdec_h264` so the
+decoder gets complete access units with full caps.
 
 **Recording muxer (`matroskamux`).** The muxer stores the H.264 stream with its
 timestamps in a container: it writes the header (codec, resolution), the clusters of

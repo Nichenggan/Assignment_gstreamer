@@ -21,7 +21,7 @@ cd <repository>
 ## Status
 
 - [x] Part 1 - pipelines with `gst-launch-1.0` (sender, receiver, playback scripts)
-- [ ] Part 2 - architecture documentation (first version in `architecture.md`)
+- [x] Part 2 - architecture documentation (`architecture.md`, graph in `evidence/pipeline.png`)
 - [ ] Part 3 - native `monitor_sender`
 - [ ] Part 4 - debug report
 - [ ] Part 5 - experiment
@@ -36,6 +36,7 @@ overlay top-center, Matroska recording, H.264 network codec, runtime 60 s.
 
 GStreamer 1.x with base, good, bad, ugly and libav plugins (`x264enc` and
 `avdec_h264` are needed), `gst-discoverer-1.0`, bash and coreutils (`timeout`).
+Graphviz (`dot`) is only needed to regenerate `evidence/pipeline.png`.
 
 - Codespaces / Ubuntu: `gstreamer1.0-tools gstreamer1.0-plugins-{base,good,bad,ugly} gstreamer1.0-libav`
 - Windows (what we also used for development): official MSVC installer
@@ -54,6 +55,7 @@ All scripts are launched from the repository root.
 | network receiver with window | `./scripts/receiver.sh` |
 | network receiver, test mode | `./scripts/receiver.sh --test` |
 | play the recording | `./scripts/play-recording.sh` (or give a file path) |
+| regenerate the pipeline graph | `./scripts/make-graph.sh` (needs Graphviz) |
 
 Start the receiver first, then the sender in another terminal. The sender
 records to `artifacts/recording.mkv` by default (`--output` to change it).
