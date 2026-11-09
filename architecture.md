@@ -1,7 +1,10 @@
 # Architecture
 
-This document describes the pipelines of part 1 (shell / `gst-launch-1.0` version).
-The native sender of part 3 will reuse the same pipeline.
+This document describes the sender and receiver pipelines. The same sender pipeline
+exists twice: `scripts/sender.sh` (part 1, `gst-launch-1.0`) and `build/monitor_sender`
+(part 3, C, section 10). The only difference is the `videobalance` element
+(`video_balance`) that the native sender adds after `source_convert` for the dynamic
+property. `verify.sh` tests the native sender.
 
 Team configuration used below (from `config/team.conf`): `smpte`, 800x450, 10 fps,
 UDP port 5123, overlay top-center, Matroska recording, H.264 over RTP, runtime 60 s.
@@ -226,14 +229,23 @@ stuck in PAUSED (the preroll of one sink waits for data that the other branch bl
 A Matroska file is only complete when `matroskamux` receives **EOS**: it then
 rewrites the duration in the header and writes the cues (seek index).
 
-* With `--duration N` (used by `verify.sh`), `videotestsrc` has `num-buffers=N*FPS`.
+* `monitor_sender --duration N` (used by `verify.sh`): a GLib timer fires after N s and
+  the application calls `gst_element_send_event(pipeline, gst_event_new_eos())`. The
+  pipeline forwards the EOS to the source, which pushes it downstream through the tee
+  and the 3 branches. When every sink has it, the bus gets `GST_MESSAGE_EOS`, the
+  application quits the main loop, sets the pipeline to NULL and returns 0. If the EOS
+  does not come back within 10 s the program stops anyway and returns 1 (so a stuck
+  pipeline is reported as an error, not hidden).
+* `scripts/sender.sh --duration N`: `videotestsrc` has `num-buffers=N*FPS`.
   After the last frame it sends EOS itself. The EOS goes through the tee into the
   three branches, `matroskamux` finalizes the file, `filesink` closes it, and when all
   sinks got EOS the pipeline posts EOS on the bus, `gst-launch-1.0` prints
   `Got EOS from element "pipeline0"` and exits with 0. No kill at all.
-* Without a duration (`--duration 0`), the sender runs until Ctrl+C. Because we use
-  `gst-launch-1.0 -e`, the interrupt is turned into an EOS event first, so the file
-  is finalized the same way.
+* Without a duration (`--duration 0`), the sender runs until Ctrl+C. `sender.sh` uses
+  `gst-launch-1.0 -e`, which turns the interrupt into an EOS event; `monitor_sender`
+  has a SIGINT handler that sets a flag, and a 100 ms GLib timer sends the EOS from the
+  main loop (GStreamer functions must not be called inside a signal handler). A second
+  Ctrl+C quits without waiting.
 * We never use `kill -9`: the muxer would not get EOS and the file would have no
   duration/index.
 
@@ -249,3 +261,57 @@ rewrites the duration in the header and writes the cues (seek index).
 
 In test mode only the sinks change, the encode/payload/depayload/decode path is
 exactly the same as in normal mode, so the test really checks the network chain.
+
+## 10. Native sender (`monitor_sender`)
+
+### Option B: parsed pipeline
+
+We chose **option B**: the program builds the same textual description as
+`sender.sh` (with the values of the command line) and calls `gst_parse_launch()`.
+The elements that must be controlled at runtime have a name and are fetched with
+`gst_bin_get_by_name()` (`video_balance` for the brightness).
+
+* Advantage: the pipeline in C is exactly the one we tested and debugged with
+  `gst-launch-1.0` in part 1 (copy/paste of the same string), caps filters and
+  request pads of the `tee` (`split. ! queue ...`) are handled by the parser, so the
+  code is short and the pipeline is easy to read and compare with `architecture.md`.
+* Limitation: errors are found only at runtime and as text (`no element "x264enc"`,
+  `no property "foo"`), not at compile time; values put in the string must be checked
+  and quoted by us (we reject `"` in `--names`/`--output`), and changing the structure
+  dynamically (e.g. adding a branch while running) is not possible without manual
+  `gst_element_factory_make()`/`gst_element_link()` code. We also check
+  `error != NULL` after `gst_parse_launch()` because it can return a pipeline *and*
+  an error (for example an unknown property).
+
+### Runtime behaviour
+
+```
+parse options (GOptionContext, also --help and the GStreamer options)
+  -> validate (missing / out of range / unknown pattern / unknown extension -> exit 2)
+gst_init
+gst_parse_launch(description)              -> error: print it, exit 1
+gst_bin_get_by_name("video_balance")
+bus watch (gst_bus_add_watch)              -> on_bus_message()
+timers: every 5 s brightness, after N s EOS, every 100 ms Ctrl+C flag
+gst_element_set_state(PLAYING)             -> failure: print the bus error, exit 1
+g_main_loop_run
+   ERROR   -> "PIPELINE_ERROR element=<src name> message=..." + debug info, quit
+   WARNING -> printed, continue
+   STATE_CHANGED (pipeline only) -> "PIPELINE_STATE A -> B" (+ DOT dump at PLAYING)
+   EOS     -> "EOS_RECEIVED", quit
+cleanup: remove timers and bus watch, set_state(NULL), unref elements, pipeline,
+         main loop, free options, gst_deinit, "EXIT code=N"
+```
+
+Exit code: 0 only if the EOS was received and no error happened, 1 for runtime errors,
+2 for command-line errors. stdout is unbuffered so the log is complete even if the
+process is killed by the `timeout` of `verify.sh`.
+
+Example of the error report (output directory that does not exist):
+
+```
+PIPELINE_ERROR element=record_sink message=Could not open file "no_such_dir/x.ts" for writing.
+Debug information: ../plugins/elements/gstfilesink.c(510): gst_file_sink_open_file (): /GstPipeline:pipeline0/GstFileSink:record_sink:
+system error: No such file or directory
+EXIT code=1
+```
