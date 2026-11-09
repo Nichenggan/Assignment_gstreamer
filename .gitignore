@@ -1,0 +1,7 @@
+# generated during build / evaluation
+build/
+artifacts/
+
+# editor stuff
+.vscode/
+*.swp

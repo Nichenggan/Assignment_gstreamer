@@ -1,0 +1,4 @@
+# shell scripts must keep LF endings, otherwise bash fails on "\r" (we work on Windows + Codespaces)
+*.sh   text eol=lf
+*.conf text eol=lf
+*.md   text eol=lf
