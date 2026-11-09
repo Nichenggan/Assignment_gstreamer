@@ -79,8 +79,23 @@ for command_name in gst-launch-1.0 gst-inspect-1.0 gst-discoverer-1.0 timeout; d
     fi
 done
 if [ $MISSING -eq 0 ]; then
-    check_elements videotestsrc textoverlay timeoverlay tee queue x264enc h264parse \
-        udpsrc udpsink rtpjitterbuffer fakesink identity avdec_h264 >> "$VERIFICATION_LOG" 2>&1 || MISSING=1
+    # elements of the sender + receiver + recording check for the assigned configuration
+    REQUIRED_ELEMENTS="videotestsrc videoconvert videobalance textoverlay timeoverlay tee queue fakesink \
+        x264enc h264parse avdec_h264 filesrc filesink udpsrc udpsink rtpjitterbuffer identity"
+    case "$CONTAINER" in
+        matroska) REQUIRED_ELEMENTS="$REQUIRED_ELEMENTS matroskamux matroskademux" ;;
+        mpegts)   REQUIRED_ELEMENTS="$REQUIRED_ELEMENTS mpegtsmux tsdemux" ;;
+    esac
+    case "$NETWORK_CODEC" in
+        h264) REQUIRED_ELEMENTS="$REQUIRED_ELEMENTS rtph264pay rtph264depay" ;;
+        jpeg) REQUIRED_ELEMENTS="$REQUIRED_ELEMENTS jpegenc jpegdec rtpjpegpay rtpjpegdepay" ;;
+    esac
+    # shellcheck disable=SC2086
+    if check_elements $REQUIRED_ELEMENTS >> "$VERIFICATION_LOG" 2>&1; then
+        vlog "all $(echo $REQUIRED_ELEMENTS | wc -w) GStreamer elements available"
+    else
+        MISSING=1
+    fi
 fi
 if [ $MISSING -ne 0 ]; then
     vlog "dependencies missing, cannot continue"
@@ -88,12 +103,16 @@ if [ $MISSING -ne 0 ]; then
 fi
 
 vlog "checking required files"
-for required_file in config/team.conf scripts/sender.sh scripts/receiver.sh scripts/play-recording.sh \
-                     scripts/build.sh scripts/clean.sh architecture.md README.md \
-                     CMakeLists.txt src/monitor_sender.c debug-report.md; do
-    [ -f "$required_file" ] || { vlog "missing file: $required_file"; MISSING=1; }
+for required_file in config/team.conf CMakeLists.txt src/monitor_sender.c \
+                     README.md architecture.md AI_USAGE.md CONTRIBUTIONS.md debug-report.md experiment.md \
+                     evidence/pipeline.png evidence/measurements.csv; do
+    [ -s "$required_file" ] || { vlog "missing or empty file: $required_file"; MISSING=1; }
+done
+for required_script in build.sh clean.sh sender.sh receiver.sh play-recording.sh run-experiment.sh verify.sh; do
+    [ -x "scripts/$required_script" ] || { vlog "missing or not executable: scripts/$required_script"; MISSING=1; }
 done
 [ $MISSING -eq 0 ] || { write_summary; exit 1; }
+vlog "all required source, documentation and evidence files present"
 
 # BUILD: build.sh must have been run successfully and produced the executable
 SENDER_CMD="build/monitor_sender"
