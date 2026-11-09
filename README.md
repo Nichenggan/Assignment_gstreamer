@@ -65,6 +65,18 @@ records to `artifacts/recording.mkv` by default (`--output` to change it).
 Everything generated goes to `artifacts/` (logs, recordings) and `build/`.
 `./scripts/clean.sh` removes both.
 
+After `./scripts/verify.sh`:
+
+```
+artifacts/
+├── build.log                  output of build.sh
+├── sender.log                 gst-launch output of the headless sender
+├── receiver.log               receiver in test mode (one "chain" line per decoded frame)
+├── verification.log           every check done by verify.sh, with timestamps
+├── verification-summary.txt   PASS/FAIL per test + OVERALL
+└── test-recording.mkv         recording made during the test
+```
+
 ## Timings (measured on our laptop)
 
 - build: a few seconds (only checks for now)
