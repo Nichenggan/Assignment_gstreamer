@@ -149,7 +149,9 @@ fi
 
 vlog "starting sender (headless, ${VERIFY_DURATION}s) -> $RECORDING_FILE"
 SENDER_START_TIME=$(date +%s)
-# SIGINT first (monitor_sender turns it into EOS), SIGKILL 5s later if still alive
+# Normal stop = --duration (EOS sent from inside monitor_sender). The timeout is only
+# a watchdog: SIGINT (works on Linux, not delivered to native programs in Git Bash,
+# see debug-report.md), then SIGKILL 5s later. If it acts, EOS/clean tests fail.
 # shellcheck disable=SC2086
 timeout -s INT -k 5s "${SENDER_TIMEOUT}s" "$SENDER_CMD" $VALID_ARGS --output "$RECORDING_FILE" \
     --duration "$VERIFY_DURATION" --headless --codec "$NETWORK_CODEC" \
