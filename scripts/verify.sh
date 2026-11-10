@@ -8,8 +8,7 @@
 #   5. logs + artifacts/verification-summary.txt (PASS/FAIL for each test)
 #
 # Every step has a timeout, nothing can wait forever.
-# Current version tests the shell sender (scripts/sender.sh); it will switch to
-# build/monitor_sender once the native application exists.
+# The sender under test is the native build/monitor_sender (built by build.sh).
 
 . "$(dirname "$0")/common.sh"
 
@@ -32,7 +31,7 @@ RECEIVER_PID=""
 # ------------------------------------------------------------------ helpers
 vlog() { log_info "$*"; echo "$(date '+%H:%M:%S') $*" >> "$VERIFICATION_LOG"; }
 
-TEST_NAMES="BUILD HELP_OPTION INVALID_ARGUMENTS SENDER_START RECEIVER_START RTP_RECEPTION EOS_HANDLING RECORDING_CREATED RECORDING_DECODABLE CLEAN_TERMINATION"
+TEST_NAMES="BUILD HELP_OPTION INVALID_ARGUMENTS SENDER_START RECEIVER_START RTP_RECEPTION EOS_HANDLING RECORDING_CREATED RECORDING_DECODABLE DYNAMIC_PROPERTY CLEAN_TERMINATION"
 for name in $TEST_NAMES; do eval "RESULT_$name=FAIL"; done
 pass() { eval "RESULT_$1=PASS"; vlog "PASS $1${2:+ - $2}"; }
 fail() { eval "RESULT_$1=FAIL"; vlog "FAIL $1${2:+ - $2}"; }
@@ -90,35 +89,51 @@ fi
 
 vlog "checking required files"
 for required_file in config/team.conf scripts/sender.sh scripts/receiver.sh scripts/play-recording.sh \
-                     scripts/build.sh scripts/clean.sh architecture.md README.md; do
+                     scripts/build.sh scripts/clean.sh architecture.md README.md \
+                     CMakeLists.txt src/monitor_sender.c debug-report.md; do
     [ -f "$required_file" ] || { vlog "missing file: $required_file"; MISSING=1; }
 done
 [ $MISSING -eq 0 ] || { write_summary; exit 1; }
 
-# BUILD: build.sh must have been run successfully before
-if [ -f "$BUILD_LOG" ] && grep -q "^BUILD OK" "$BUILD_LOG"; then
-    pass BUILD
+# BUILD: build.sh must have been run successfully and produced the executable
+SENDER_CMD="build/monitor_sender"
+[ -x "$SENDER_CMD.exe" ] && SENDER_CMD="$SENDER_CMD.exe"   # Windows build
+if [ -f "$BUILD_LOG" ] && grep -q "^BUILD OK" "$BUILD_LOG" && [ -x "$SENDER_CMD" ]; then
+    pass BUILD "$SENDER_CMD"
 else
-    fail BUILD "run ./scripts/build.sh first (no 'BUILD OK' in $BUILD_LOG)"
+    fail BUILD "run ./scripts/build.sh first (no 'BUILD OK' in $BUILD_LOG or no $SENDER_CMD)"
+    write_summary; exit 1
 fi
 
 # ------------------------------------------------------------------ 2. command line
-SENDER_CMD="scripts/sender.sh"
-if timeout 10s bash "$SENDER_CMD" --help >> "$VERIFICATION_LOG" 2>&1; then
-    pass HELP_OPTION "$SENDER_CMD --help returns 0"
+if timeout 10s "$SENDER_CMD" --help >> "$VERIFICATION_LOG" 2>&1; then
+    pass HELP_OPTION "monitor_sender --help returns 0"
 else
-    fail HELP_OPTION "$SENDER_CMD --help failed"
+    fail HELP_OPTION "monitor_sender --help failed"
 fi
 
+# arguments taken from the team configuration
+VALID_ARGS="--pattern $PATTERN --width $WIDTH --height $HEIGHT --fps $FPS --port $PORT"
 INVALID_OK=1
-for invalid_args in "--duration abc" "--duration" "--unknown-option"; do
+for invalid_args in \
+    "" \
+    "--pattern $PATTERN --width $WIDTH --height $HEIGHT --fps $FPS --port $PORT" \
+    "$VALID_ARGS --output $ARTIFACTS_DIR/x.mkv --width abc" \
+    "$VALID_ARGS --output $ARTIFACTS_DIR/x.mkv --fps 0" \
+    "$VALID_ARGS --output $ARTIFACTS_DIR/x.mkv --port 80" \
+    "$VALID_ARGS --output $ARTIFACTS_DIR/x.mkv --pattern not-a-pattern" \
+    "$VALID_ARGS --output $ARTIFACTS_DIR/x.avi" \
+    "$VALID_ARGS --output $ARTIFACTS_DIR/x.mkv --unknown-option"; do
     # shellcheck disable=SC2086
-    if timeout 20s bash "$SENDER_CMD" --headless $invalid_args >> "$VERIFICATION_LOG" 2>&1; then
-        vlog "'$invalid_args' was accepted but should be rejected"
+    timeout 10s "$SENDER_CMD" --headless --duration 1 $invalid_args >> "$VERIFICATION_LOG" 2>&1
+    status=$?
+    if [ $status -eq 0 ] || [ $status -eq 124 ]; then
+        vlog "'$invalid_args' was not rejected (exit code $status)"
         INVALID_OK=0
     fi
 done
-[ $INVALID_OK -eq 1 ] && pass INVALID_ARGUMENTS "bad arguments give a non-zero exit code" || fail INVALID_ARGUMENTS
+rm -f "$ARTIFACTS_DIR/x.mkv" "$ARTIFACTS_DIR/x.avi"
+[ $INVALID_OK -eq 1 ] && pass INVALID_ARGUMENTS "8 bad command lines give a non-zero exit code" || fail INVALID_ARGUMENTS
 
 # ------------------------------------------------------------------ 3. receiver + sender
 FRAMES_EXPECTED=$((FPS * 3))
@@ -134,26 +149,36 @@ fi
 
 vlog "starting sender (headless, ${VERIFY_DURATION}s) -> $RECORDING_FILE"
 SENDER_START_TIME=$(date +%s)
-# SIGINT first (gst-launch -e turns it into EOS), SIGKILL 5s later if still alive
-timeout -s INT -k 5s "${SENDER_TIMEOUT}s" bash "$SENDER_CMD" --headless --duration "$VERIFY_DURATION" \
-    --output "$RECORDING_FILE" > "$SENDER_LOG" 2>&1
+# SIGINT first (monitor_sender turns it into EOS), SIGKILL 5s later if still alive
+# shellcheck disable=SC2086
+timeout -s INT -k 5s "${SENDER_TIMEOUT}s" "$SENDER_CMD" $VALID_ARGS --output "$RECORDING_FILE" \
+    --duration "$VERIFY_DURATION" --headless --codec "$NETWORK_CODEC" \
+    --overlay-position "$OVERLAY_POSITION" --names "$TEAM_MEMBERS" > "$SENDER_LOG" 2>&1
 SENDER_STATUS=$?
 SENDER_ELAPSED=$(( $(date +%s) - SENDER_START_TIME ))
 vlog "sender finished with exit code $SENDER_STATUS after ${SENDER_ELAPSED}s"
 
-if grep -q "Setting pipeline to PLAYING" "$SENDER_LOG"; then
+if grep -q "PIPELINE_STATE PAUSED -> PLAYING" "$SENDER_LOG"; then
     pass SENDER_START "pipeline reached PLAYING"
 else
     fail SENDER_START "pipeline never reached PLAYING, see $SENDER_LOG"
 fi
 
-if grep -q "Got EOS from element" "$SENDER_LOG"; then
-    pass EOS_HANDLING "EOS reached the end of the pipeline"
+if grep -q "STOP_REQUESTED reason=duration" "$SENDER_LOG" && grep -q "^EOS_RECEIVED" "$SENDER_LOG"; then
+    pass EOS_HANDLING "EOS sent after ${VERIFY_DURATION}s and received on the bus"
 else
-    fail EOS_HANDLING "no EOS message in $SENDER_LOG"
+    fail EOS_HANDLING "no STOP_REQUESTED/EOS_RECEIVED in $SENDER_LOG"
 fi
 
-if [ $SENDER_STATUS -eq 0 ] && grep -q "Freeing pipeline" "$SENDER_LOG"; then
+# with 12 s we expect a change at 5 s and at 10 s
+DYNAMIC_CHANGES=$(grep -c "^DYNAMIC_PROPERTY element=video_balance property=brightness" "$SENDER_LOG")
+if [ "$DYNAMIC_CHANGES" -ge $((VERIFY_DURATION / 5)) ]; then
+    pass DYNAMIC_PROPERTY "$DYNAMIC_CHANGES brightness changes logged"
+else
+    fail DYNAMIC_PROPERTY "only $DYNAMIC_CHANGES changes logged, expected $((VERIFY_DURATION / 5))"
+fi
+
+if [ $SENDER_STATUS -eq 0 ] && grep -q "^EXIT code=0" "$SENDER_LOG"; then
     CLEAN_SENDER=1
 else
     CLEAN_SENDER=0
@@ -193,12 +218,14 @@ else
     fail RECORDING_DECODABLE "gst-discoverer / decode failed, see $VERIFICATION_LOG"
 fi
 
-# clean termination: sender exited 0 by itself and no gst-launch process is left
+# clean termination: sender exited 0 by itself and no sender/receiver process is left
 LEFTOVER=0
 if command -v tasklist >/dev/null 2>&1; then
-    tasklist //FI "IMAGENAME eq gst-launch-1.0.exe" 2>/dev/null | grep -qi "gst-launch" && LEFTOVER=1
+    for image in gst-launch-1.0.exe monitor_sender.exe; do
+        tasklist //FI "IMAGENAME eq $image" 2>/dev/null | grep -qi "${image%.exe}" && LEFTOVER=1
+    done
 elif command -v pgrep >/dev/null 2>&1; then
-    pgrep -u "$(id -u)" -f "gst-launch-1.0.*($PORT|test-recording)" >/dev/null && LEFTOVER=1
+    pgrep -u "$(id -u)" -f "(gst-launch-1.0.*port=$PORT|monitor_sender)" >/dev/null && LEFTOVER=1
 fi
 if [ $CLEAN_SENDER -eq 1 ] && [ $LEFTOVER -eq 0 ]; then
     pass CLEAN_TERMINATION "sender exit code 0, no process left"
