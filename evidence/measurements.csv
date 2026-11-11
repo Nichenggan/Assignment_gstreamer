@@ -1,0 +1,5 @@
+run,codec,repetition,duration_s,sender_exit_code,sender_cpu_s,sender_elapsed_s,sender_cpu_percent_one_core,network_bytes,network_kbit_s,recording_bytes,sender_warnings,sender_errors,cpu_cores
+run1-h264-r1,h264,1,45,0,12.59,44.78,28.1,5774014,1026.5,11636652,0,0,8
+run2-jpeg-r1,jpeg,1,45,0,11.19,44.96,24.9,20817168,3700.8,11652443,0,0,8
+run3-h264-r2,h264,2,45,0,11.38,44.80,25.4,5726609,1018.1,11566350,0,0,8
+run4-jpeg-r2,jpeg,2,45,0,10.69,44.86,23.8,20863377,3709.0,11678032,0,0,8
