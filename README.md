@@ -24,8 +24,10 @@ cd <repository>
 - [x] Part 2 - architecture documentation (`architecture.md`, graph in `evidence/pipeline.png`)
 - [x] Part 3 - native `monitor_sender` (`src/monitor_sender.c`, built with CMake)
 - [x] Part 4 - debug report (`debug-report.md`)
-- [ ] Part 5 - experiment
-- [ ] Part 6 - full automated verification (`verify.sh` already tests `monitor_sender`)
+- [x] Part 5 - experiment H.264/RTP vs JPEG/RTP (`experiment.md`, `evidence/measurements.csv`)
+- [x] Part 6 - automated verification (`scripts/verify.sh`)
+
+Other documents: `debug-report.md`, `CONTRIBUTIONS.md`, `AI_USAGE.md`.
 
 ## Assigned configuration
 
@@ -64,7 +66,9 @@ All scripts are launched from the repository root.
 | network receiver with window | `./scripts/receiver.sh` |
 | network receiver, test mode | `./scripts/receiver.sh --test` |
 | play the recording | `./scripts/play-recording.sh` (or give a file path) |
+| play the sample recording of the repository | `./scripts/play-recording.sh recordings/sample.mkv` |
 | regenerate the pipeline graph | `./scripts/make-graph.sh` (needs Graphviz) |
+| run the experiment (part 5, ~4 min) | `./scripts/run-experiment.sh` (after `build.sh`) |
 
 Start the receiver first, then the sender in another terminal. `sender.sh`
 records to `artifacts/recording.mkv` by default (`--output` to change it).
@@ -119,7 +123,7 @@ artifacts/
 ## Timings (measured on our laptop)
 
 - build: about 30 s on Windows/MSVC (CMake configure + compile), less on Linux
-- verification: about 40 s
+- verification: about 40 s (`verify.sh`), experiment: about 4 min (`run-experiment.sh`)
 
 ## Known limitations
 
