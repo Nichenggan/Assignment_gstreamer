@@ -11,7 +11,7 @@ cd <repository>
 ```
 
 `verify.sh` prints a PASS/FAIL summary and writes it to `artifacts/verification-summary.txt`.
-
+> Update 11 November : The script is been verified in the Codespace.
 ## Team
 
 - Nikola MILOSAVLJEVIC
