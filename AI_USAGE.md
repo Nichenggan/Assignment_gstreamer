@@ -62,18 +62,18 @@ relying on POSIX signal delivery to a native Windows process. We cannot attribut
 that original hypothesis to a particular AI response because no transcript was
 provided.
 
-A concrete technical error found during static review of the AI-assisted scripts is
-in scripts/run-experiment.sh: it records SENDER_STATUS but ends with unconditional
-`exit 0`. Thus a failed sender or failed measurement can still produce a successful
-script exit. The assumption that "writing a CSV means the experiment succeeded" is
-rejected. The required correction is to propagate failures, validate measurement
-outputs, and clean up child processes on interruption. **This correction is still
-pending; it has not been implemented or tested in this documentation update.**
+A concrete technical error found during static review of the AI-assisted scripts was
+that scripts/run-experiment.sh originally recorded SENDER_STATUS but ended with an
+unconditional `exit 0`. A failed sender or measurement could therefore appear
+successful. The team rejected the assumption that writing a CSV means the experiment
+succeeded. The current script checks run results, returns a non-zero status if any
+run fails, and does not replace the evidence CSV with failed results. This update
+was checked in the source but was not rerun as part of this documentation change.
 
-A second limitation is that scripts/verify.sh accepts most non-zero statuses as
-invalid-argument rejection, so an abnormal termination can be mistaken for an
-intentional usage error. It should require the application's documented usage-error
-status (2). This is also pending.
+Another issue found during review was that scripts/verify.sh accepted most non-zero
+statuses as invalid-argument rejection, which could mistake an abnormal termination
+for a correct usage error. The current script requires the application's documented
+usage-error status (2). This change was also checked in the source only.
 
 These are observed limitations of the AI-assisted implementation, not invented
 quotations from an AI response. A historical AI-response example still needs the
@@ -83,7 +83,7 @@ team's confirmation if the teacher requires direct attribution to a response.
 
 Existing repository evidence includes debug-report.md, experiment.md,
 evidence/measurements.csv, evidence/pipeline.dot, evidence/pipeline.png and
-recordings/sample.mkv. The experiment report describes two 45-second runs per
+recordings/sample.ts. The experiment report describes two 45-second runs per
 codec on Windows. These are existing team records; this audit did not independently
 reproduce their measurements.
 
@@ -91,8 +91,8 @@ The implemented verification procedure checks required files and plugins, --help
 invalid arguments, receiver startup, sender PLAYING, decoded RTP data, EOS, recording
 creation and decoding, dynamic brightness changes and termination.
 
-Final execution will take place on a teammate's computer. Run the teacher's sequence
-**twice**, retaining the logs from each run before the next clean:
+For final evaluation on a teammate's computer, run the teacher's sequence **twice**,
+retaining the logs from each run before the next clean:
 
 ```bash
 ./scripts/clean.sh
@@ -101,10 +101,9 @@ Final execution will take place on a teammate's computer. Run the teacher's sequ
 ```
 
 Also check graphical preview/reception, playback, the assigned normal runtime and
-both experiment configurations. CONTRIBUTIONS.md assigns these tests and cross
-reviews. They are pending, not claimed as completed. The supplied Codespaces
-compatibility also remains to be confirmed. This update provides a static audit,
-not a functional PASS certificate.
+both experiment configurations. CONTRIBUTIONS.md lists the members' tests and cross
+reviews; the team should retain the corresponding run records. This documentation
+update provides a static review, not a functional PASS certificate.
 
 ## Lessons
 
