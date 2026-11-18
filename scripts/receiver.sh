@@ -82,10 +82,12 @@ PIPELINE="udpsrc name=network_source port=$PORT caps=\"$RTP_CAPS\" \
 
 if [ "$TEST_MODE" -eq 1 ]; then
     log_info "test mode: waiting for $FRAMES_TO_RECEIVE $NETWORK_CODEC frames on udp port $PORT (timeout ${TIMEOUT_SECONDS}s)"
-    # the receiver has no file to finalize, so stopping it with timeout is ok
-    eval "timeout ${TIMEOUT_SECONDS}s gst-launch-1.0 $LAUNCH_FLAGS $PIPELINE"
+    # the receiver has no file to finalize, so stopping it with timeout is ok.
+    # -k: SIGKILL 3 s later if the first signal is ignored (always the case for a
+    # native program in Git Bash, see debug-report.md)
+    eval "timeout -k 3s ${TIMEOUT_SECONDS}s gst-launch-1.0 $LAUNCH_FLAGS $PIPELINE"
     STATUS=$?
-    if [ $STATUS -eq 124 ]; then
+    if [ $STATUS -eq 124 ] || [ $STATUS -eq 137 ]; then
         log_error "timeout: did not receive $FRAMES_TO_RECEIVE frames in ${TIMEOUT_SECONDS}s"
         exit 1
     elif [ $STATUS -ne 0 ]; then

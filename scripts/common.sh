@@ -63,14 +63,61 @@ find_gstreamer() {
     return 1
 }
 
+# max time for one gst-inspect-1.0 call (the first call can rebuild the plugin registry)
+GST_INSPECT_TIMEOUT=30
+
 # check_elements elem1 elem2 ... -> fails if one element is not installed
 check_elements() {
-    local element missing=0
+    local element missing=0 status
     for element in "$@"; do
-        if ! gst-inspect-1.0 "$element" >/dev/null 2>&1; then
+        timeout -k 5s "${GST_INSPECT_TIMEOUT}s" gst-inspect-1.0 "$element" >/dev/null 2>&1
+        status=$?
+        if [ $status -eq 124 ] || [ $status -eq 137 ]; then
+            log_error "gst-inspect-1.0 $element timed out after ${GST_INSPECT_TIMEOUT}s"
+            missing=1
+        elif [ $status -ne 0 ]; then
             log_error "GStreamer element '$element' is not available"
             missing=1
         fi
     done
     return $missing
+}
+
+# list_descendants PID -> prints the PIDs of all children, grandchildren, ...
+# (column 2 = PID, column 3 = PPID in "ps -ef" on Linux and in Git Bash)
+list_descendants() {
+    local child
+    for child in $(ps -ef 2>/dev/null | awk -v parent="$1" 'NR > 1 && $3 == parent { print $2 }'); do
+        list_descendants "$child"
+        echo "$child"
+    done
+}
+
+# kill_process_tree PID -> kills PID and every process it started.
+# SIGKILL: only used on error/interrupt paths, the normal path stops with EOS.
+# (SIGINT/SIGTERM do not reach native programs in Git Bash, see debug-report.md)
+kill_process_tree() {
+    local root=$1 pid
+    [ -n "$root" ] || return 0
+    for pid in $(list_descendants "$root") "$root"; do
+        kill -KILL "$pid" 2>/dev/null
+    done
+    wait "$root" 2>/dev/null
+    return 0
+}
+
+# wait_with_deadline PID SECONDS -> exit status of PID, or 124 if it was still
+# running after SECONDS (it is then killed with all its children)
+# (real time with $SECONDS: counting "sleep 0.1" iterations is wrong on Windows,
+# where each iteration takes much longer than 0.1 s)
+wait_with_deadline() {
+    local pid=$1 deadline=$((SECONDS + $2))
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ $SECONDS -ge $deadline ]; then
+            kill_process_tree "$pid"
+            return 124
+        fi
+        sleep 0.2
+    done
+    wait "$pid"
 }

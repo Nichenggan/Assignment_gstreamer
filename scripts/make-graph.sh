@@ -38,9 +38,13 @@ mkdir -p "$DOT_DIR" "$(dirname "$OUTPUT_PNG")" || exit 1
 log_info "running the sender for ${GRAPH_DURATION}s with GST_DEBUG_DUMP_DOT_DIR=$DOT_DIR"
 # absolute path: gst-launch is a native program and the dir must not depend on its cwd
 GST_DEBUG_DUMP_DOT_DIR="$(cd "$DOT_DIR" && pwd)" \
-    timeout 60s bash scripts/sender.sh --headless --duration "$GRAPH_DURATION" \
-    --output "$ARTIFACTS_DIR/graph-recording.$RECORDING_EXT" > "$ARTIFACTS_DIR/graph-sender.log" 2>&1 \
-    || { log_error "sender failed, see $ARTIFACTS_DIR/graph-sender.log"; exit 1; }
+    bash scripts/sender.sh --headless --duration "$GRAPH_DURATION" \
+    --output "$ARTIFACTS_DIR/graph-recording.$RECORDING_EXT" > "$ARTIFACTS_DIR/graph-sender.log" 2>&1 &
+SENDER_PID=$!
+trap 'kill_process_tree "$SENDER_PID"; exit 130' INT TERM
+# deadline instead of "timeout": it also kills the native gst-launch child
+wait_with_deadline "$SENDER_PID" 60 || { log_error "sender failed or timed out, see $ARTIFACTS_DIR/graph-sender.log"; exit 1; }
+trap - INT TERM
 
 DOT_FILE=$(ls "$DOT_DIR"/*PAUSED_PLAYING.dot 2>/dev/null | head -1)
 if [ -z "$DOT_FILE" ]; then
