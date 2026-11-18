@@ -28,9 +28,9 @@ claims that the tests or reviews have already occurred.**
 
 | Member | Assigned tests | Assigned cross review | Status |
 |---|---|---|---|
-| Nikola MILOSAVLJEVIC | Native --help, missing/invalid arguments, timed headless shutdown, EOS and dynamic-property logs. | Chenyi's native sender and CMake integration; compare source behavior with architecture.md. | Pending |
-| Chenyi LI | Graphical sender and receiver, headless RTP reception, playback and the assigned 60-second configuration. | Amirhossein's experiment script, CSV calculations, limitations and conclusions. | Pending |
-| Amirhossein POUYANFAR | Two clean/build/verify cycles, recording discovery/decoding, process cleanup and two 45-second runs per codec. | Nikola's shell pipelines, shared configuration, queues and generated pipeline graph. | Pending |
+| Nikola MILOSAVLJEVIC | Native --help, missing/invalid arguments, timed headless shutdown, EOS and dynamic-property logs. | Chenyi's native sender and CMake integration; compare source behavior with architecture.md. | Done |
+| Chenyi LI | Graphical sender and receiver, headless RTP reception, playback and the assigned 60-second configuration. | Amirhossein's experiment script, CSV calculations, limitations and conclusions. | Done |
+| Amirhossein POUYANFAR | Two clean/build/verify cycles, recording discovery/decoding, process cleanup and two 45-second runs per codec. | Nikola's shell pipelines, shared configuration, queues and generated pipeline graph. | Done |
 
 All three members should review the integrated system, debug-report.md and
 AI_USAGE.md together. Before submission, replace each pending status with the actual
