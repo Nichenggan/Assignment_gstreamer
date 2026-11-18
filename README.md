@@ -31,8 +31,14 @@ Other documents: `debug-report.md`, `CONTRIBUTIONS.md`, `AI_USAGE.md`.
 
 ## Assigned configuration
 
-See `config/team.conf`: pattern `smpte`, 800x450, 10 fps, UDP port 5123,
-overlay top-center, Matroska recording, H.264 network codec, runtime 60 s.
+Team 4, see `config/team.conf`:
+
+| Pattern | Resolution | FPS | RTP port | Overlay | Container | Network codec | Runtime |
+|---|---|---|---|---|---|---|---|
+| `zone-plate` | 640x360 | 15 | 5104 | top-center | MPEG-TS (`.ts`) | H.264 | 60 s |
+
+For `zone-plate` the senders set `kx2=20 ky2=20 kt=1` on `videotestsrc`: with the
+default coefficients (all 0) the pattern is only a uniform grey picture.
 
 ## Dependencies
 
@@ -57,7 +63,7 @@ All scripts are launched from the repository root.
 
 | What | Command |
 |---|---|
-| native sender with preview window (60 s) | `./build/monitor_sender --pattern smpte --width 800 --height 450 --fps 10 --port 5123 --output artifacts/recording.mkv --duration 60` |
+| native sender with preview window (60 s) | `./build/monitor_sender --pattern zone-plate --width 640 --height 360 --fps 15 --port 5104 --output artifacts/recording.ts --duration 60` |
 | native sender, headless | same + `--headless` |
 | native sender options | `./build/monitor_sender --help` |
 | shell sender (part 1) with preview window (60 s) | `./scripts/sender.sh` |
@@ -66,12 +72,13 @@ All scripts are launched from the repository root.
 | network receiver with window | `./scripts/receiver.sh` |
 | network receiver, test mode | `./scripts/receiver.sh --test` |
 | play the recording | `./scripts/play-recording.sh` (or give a file path) |
-| play the sample recording of the repository | `./scripts/play-recording.sh recordings/sample.mkv` |
+| play the sample recording of the repository | `./scripts/play-recording.sh recordings/sample.ts` |
 | regenerate the pipeline graph | `./scripts/make-graph.sh` (needs Graphviz) |
 | run the experiment (part 5, ~4 min) | `./scripts/run-experiment.sh` (after `build.sh`) |
+| reproduce the fault of the debug report | `./scripts/debug-stop-signal.sh` |
 
 Start the receiver first, then the sender in another terminal. `sender.sh`
-records to `artifacts/recording.mkv` by default (`--output` to change it).
+records to `artifacts/recording.ts` by default (`--output` to change it).
 
 ## Native sender (`monitor_sender`)
 
@@ -117,7 +124,7 @@ artifacts/
 ├── receiver.log               receiver in test mode (one "chain" line per decoded frame)
 ├── verification.log           every check done by verify.sh, with timestamps
 ├── verification-summary.txt   PASS/FAIL per test + OVERALL
-└── test-recording.mkv         recording made during the test
+└── test-recording.ts          recording made during the test (MPEG-TS)
 ```
 
 ## Timings (measured on our laptop)
@@ -133,5 +140,10 @@ artifacts/
   automatically, the Ctrl+C path of `monitor_sender` was not tested on Windows.
 - `--duration` counts from the start of the program, so the recording is a few hundred
   ms shorter or longer than the requested duration.
-- A truncated Matroska file can still be partly decoded, so `verify.sh` also checks
-  the duration reported by `gst-discoverer-1.0`, not only that it decodes.
+- A truncated recording (MPEG-TS, and also Matroska) can still be partly decoded, so
+  `verify.sh` also checks the duration reported by `gst-discoverer-1.0`, not only that
+  it decodes.
+- Developed and tested on Windows 11 (Git Bash, GStreamer 1.28.8 MSVC). The scripts also
+  support Linux/Codespaces, but we did not run them there ourselves.
+- `scripts/run-experiment.sh` returns exit code 1 if any run is invalid and then does not
+  overwrite `evidence/measurements.csv`.
