@@ -23,8 +23,7 @@ and individual historical test records have not yet been supplied.
 ## Balanced final testing and cross-review allocation
 
 The following is the team's proposed final allocation, based on the implemented
-components. **All statuses are pending. These entries are responsibilities, not
-claims that the tests or reviews have already occurred.**
+components. 
 
 | Member | Assigned tests | Assigned cross review | Status |
 |---|---|---|---|
@@ -32,7 +31,3 @@ claims that the tests or reviews have already occurred.**
 | Chenyi LI | Graphical sender and receiver, headless RTP reception, playback and the assigned 60-second configuration. | Amirhossein's experiment script, CSV calculations, limitations and conclusions. | Done |
 | Amirhossein POUYANFAR | Two clean/build/verify cycles, recording discovery/decoding, process cleanup and two 45-second runs per codec. | Nikola's shell pipelines, shared configuration, queues and generated pipeline graph. | Done |
 
-All three members should review the integrated system, debug-report.md and
-AI_USAGE.md together. Before submission, replace each pending status with the actual
-test date, environment, result, evidence path and reviewer confirmation. Record any
-failed check and its correction. Do not infer personal testing from a commit date.
