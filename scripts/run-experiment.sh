@@ -13,7 +13,8 @@
 #   - a raw UDP capture (udpsrc ! filesink) counts the bytes really sent on the port
 #   - the CPU time of monitor_sender is sampled 1 s before the end of the run
 #   - the size of the recording and the warnings/errors of the sender are collected
-# Results: evidence/measurements.csv, logs in artifacts/experiment/.
+# Results: evidence/measurements.csv (only replaced if every run is valid), logs
+# and raw results in artifacts/experiment/. Exit code 1 if any run failed.
 # Needs ./scripts/build.sh first.
 
 . "$(dirname "$0")/common.sh"
@@ -54,7 +55,7 @@ sample_cpu() {
     if [ $IS_WINDOWS -eq 1 ]; then
         local winpid
         winpid=$(cat "/proc/$pid/winpid" 2>/dev/null) || return 1
-        powershell.exe -NoProfile -Command \
+        timeout -k 5s 20s powershell.exe -NoProfile -Command \
             "\$p = Get-Process -Id $winpid -ErrorAction Stop; '{0:F2} {1:F2}' -f \$p.TotalProcessorTime.TotalSeconds, ((Get-Date) - \$p.StartTime).TotalSeconds" \
             2>/dev/null | tr -d '\r' | tr ',' '.'
     else
@@ -67,7 +68,27 @@ sample_cpu() {
     fi
 }
 
-echo "run,codec,repetition,duration_s,sender_exit_code,sender_cpu_s,sender_elapsed_s,sender_cpu_percent_one_core,network_bytes,network_kbit_s,recording_bytes,sender_warnings,sender_errors,cpu_cores" > "$CSV_FILE"
+CSV_HEADER="run,codec,repetition,duration_s,sender_exit_code,sender_cpu_s,sender_elapsed_s,sender_cpu_percent_one_core,network_bytes,network_kbit_s,recording_bytes,sender_warnings,sender_errors,cpu_cores"
+# results go first to artifacts/; evidence/measurements.csv is only replaced when
+# every run is valid, so a failed experiment never overwrites good evidence
+RESULTS_FILE="$EXPERIMENT_DIR/measurements.csv"
+echo "$CSV_HEADER" > "$RESULTS_FILE"
+
+CAPTURE_PID=""
+SENDER_PID=""
+FAILED_RUNS=0
+
+stop_children() {
+    kill_process_tree "$SENDER_PID";  SENDER_PID=""
+    kill_process_tree "$CAPTURE_PID"; CAPTURE_PID=""
+}
+trap stop_children EXIT
+trap 'log_error "interrupted, stopping sender and capture"; stop_children; exit 130' INT TERM
+
+run_failed() {
+    log_error "[$RUN_NAME] $*"
+    RUN_OK=0
+}
 
 log_info "experiment: H.264 vs JPEG over RTP, ${RUN_DURATION}s per run, $REPEATS repetitions"
 log_info "fixed: pattern=$PATTERN ${WIDTH}x${HEIGHT}@${FPS}fps port=$PORT, recording H.264/$CONTAINER"
@@ -77,6 +98,7 @@ for repetition in $(seq 1 "$REPEATS"); do
     for codec in h264 jpeg; do
         RUN_NUMBER=$((RUN_NUMBER + 1))
         RUN_NAME="run${RUN_NUMBER}-${codec}-r${repetition}"
+        RUN_OK=1
         CAPTURE_FILE="$EXPERIMENT_DIR/$RUN_NAME.udp"
         RECORDING_FILE="$EXPERIMENT_DIR/$RUN_NAME.$RECORDING_EXT"
         SENDER_LOG="$EXPERIMENT_DIR/$RUN_NAME-sender.log"
@@ -90,6 +112,11 @@ for repetition in $(seq 1 "$REPEATS"); do
             ! filesink location="$CAPTURE_FILE" buffer-mode=unbuffered > "$CAPTURE_LOG" 2>&1 &
         CAPTURE_PID=$!
         sleep 2
+        if ! kill -0 "$CAPTURE_PID" 2>/dev/null; then
+            wait "$CAPTURE_PID"
+            run_failed "UDP capture did not start (exit code $?, port $PORT busy?), see $CAPTURE_LOG"
+            CAPTURE_PID=""
+        fi
 
         log_info "[$RUN_NAME] starting monitor_sender --codec $codec for ${RUN_DURATION}s"
         "$SENDER_BIN" --pattern "$PATTERN" --width "$WIDTH" --height "$HEIGHT" --fps "$FPS" \
@@ -98,23 +125,39 @@ for repetition in $(seq 1 "$REPEATS"); do
             > "$SENDER_LOG" 2>&1 &
         SENDER_PID=$!
 
-        # sample the CPU 1 s before the EOS (the process is gone after it)
-        sleep $((RUN_DURATION - 1))
-        CPU_SAMPLE=$(sample_cpu "$SENDER_PID")
-        wait "$SENDER_PID"
-        SENDER_STATUS=$?
+        # sample the CPU 1 s before the EOS (the process is gone after it); stop
+        # waiting early if the sender already died
+        # (real time with $SECONDS, not a count of sleep iterations)
+        sender_started=$SECONDS
+        while [ $((SECONDS - sender_started)) -lt $((RUN_DURATION - 1)) ] && kill -0 "$SENDER_PID" 2>/dev/null; do
+            sleep 0.2
+        done
+        CPU_SAMPLE=""
+        if kill -0 "$SENDER_PID" 2>/dev/null; then
+            CPU_SAMPLE=$(sample_cpu "$SENDER_PID")
+        else
+            run_failed "sender stopped after $((SECONDS - sender_started)) s instead of ${RUN_DURATION} s"
+        fi
 
-        # stop the capture (no more packets anyway). SIGKILL because SIGINT does not
-        # reach native programs in Git Bash (see debug-report.md)
+        # bounded wait: the EOS must be finished within 30 s
+        wait_with_deadline "$SENDER_PID" 30
+        SENDER_STATUS=$?
+        SENDER_PID=""
+        [ $SENDER_STATUS -eq 124 ] && run_failed "sender did not exit 30 s after its duration, killed"
+
+        # stop the capture (no more packets anyway); SIGKILL on the whole tree
+        # because SIGINT does not reach native programs in Git Bash (debug-report.md)
         sleep 1
-        kill -KILL "$CAPTURE_PID" 2>/dev/null
-        wait "$CAPTURE_PID" 2>/dev/null
+        kill_process_tree "$CAPTURE_PID"
+        CAPTURE_PID=""
 
         read -r CPU_SECONDS ELAPSED_SECONDS <<< "${CPU_SAMPLE:-NA NA}"
-        if [ "$CPU_SECONDS" != NA ]; then
+        if echo "$CPU_SECONDS $ELAPSED_SECONDS" | grep -Eq '^[0-9]+(\.[0-9]+)? [0-9]+(\.[0-9]+)?$' \
+           && awk -v e="$ELAPSED_SECONDS" 'BEGIN { exit !(e > 0) }'; then
             CPU_PERCENT=$(awk -v c="$CPU_SECONDS" -v e="$ELAPSED_SECONDS" 'BEGIN { printf "%.1f", 100 * c / e }')
         else
-            CPU_PERCENT=NA
+            CPU_SECONDS=NA; ELAPSED_SECONDS=NA; CPU_PERCENT=NA
+            run_failed "CPU sampling failed (got '$CPU_SAMPLE')"
         fi
         NETWORK_BYTES=$(wc -c < "$CAPTURE_FILE" 2>/dev/null || echo 0)
         NETWORK_KBPS=$(awk -v b="$NETWORK_BYTES" -v d="$RUN_DURATION" 'BEGIN { printf "%.1f", b * 8 / 1000 / d }')
@@ -122,13 +165,30 @@ for repetition in $(seq 1 "$REPEATS"); do
         WARNINGS=$(grep -c "PIPELINE_WARNING" "$SENDER_LOG")
         ERRORS=$(grep -c "PIPELINE_ERROR" "$SENDER_LOG")
 
-        echo "$RUN_NAME,$codec,$repetition,$RUN_DURATION,$SENDER_STATUS,$CPU_SECONDS,$ELAPSED_SECONDS,$CPU_PERCENT,$NETWORK_BYTES,$NETWORK_KBPS,$RECORDING_BYTES,$WARNINGS,$ERRORS,$CPU_CORES" >> "$CSV_FILE"
-        log_info "[$RUN_NAME] exit=$SENDER_STATUS cpu=${CPU_PERCENT}% network=${NETWORK_KBPS} kbit/s recording=${RECORDING_BYTES} B"
+        # validate the measurements of this run
+        [ $SENDER_STATUS -eq 0 ]              || run_failed "sender exit code $SENDER_STATUS, see $SENDER_LOG"
+        grep -q "^EOS_RECEIVED" "$SENDER_LOG" || run_failed "sender log has no EOS_RECEIVED"
+        [ "$ERRORS" -eq 0 ]                   || run_failed "$ERRORS PIPELINE_ERROR lines in $SENDER_LOG"
+        [ "$NETWORK_BYTES" -gt 0 ]            || run_failed "no UDP data captured on port $PORT"
+        [ "$RECORDING_BYTES" -gt 0 ]          || run_failed "recording $RECORDING_FILE missing or empty"
+
+        echo "$RUN_NAME,$codec,$repetition,$RUN_DURATION,$SENDER_STATUS,$CPU_SECONDS,$ELAPSED_SECONDS,$CPU_PERCENT,$NETWORK_BYTES,$NETWORK_KBPS,$RECORDING_BYTES,$WARNINGS,$ERRORS,$CPU_CORES" >> "$RESULTS_FILE"
+        if [ $RUN_OK -eq 1 ]; then
+            log_info "[$RUN_NAME] OK exit=$SENDER_STATUS cpu=${CPU_PERCENT}% network=${NETWORK_KBPS} kbit/s recording=${RECORDING_BYTES} B"
+        else
+            FAILED_RUNS=$((FAILED_RUNS + 1))
+            log_error "[$RUN_NAME] INVALID run (kept in $RESULTS_FILE for inspection)"
+        fi
 
         rm -f "$CAPTURE_FILE"   # can be large, only its size matters
     done
 done
 
-log_info "results written to $CSV_FILE"
-column -s, -t < "$CSV_FILE" 2>/dev/null || cat "$CSV_FILE"
+column -s, -t < "$RESULTS_FILE" 2>/dev/null || cat "$RESULTS_FILE"
+if [ $FAILED_RUNS -gt 0 ]; then
+    log_error "$FAILED_RUNS of $RUN_NUMBER runs failed; $CSV_FILE was NOT updated (results in $RESULTS_FILE)"
+    exit 1
+fi
+cp "$RESULTS_FILE" "$CSV_FILE" || { log_error "cannot write $CSV_FILE"; exit 1; }
+log_info "all $RUN_NUMBER runs valid, results written to $CSV_FILE"
 exit 0
