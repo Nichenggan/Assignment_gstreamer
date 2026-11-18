@@ -263,9 +263,14 @@ static gchar *build_pipeline_description(const Options *opt)
             opt->bitrate, opt->fps);
     }
 
+    /* zone-plate needs its coefficients: with the defaults (all 0) videotestsrc only
+     * draws a uniform grey picture. kt=1 makes the rings move over time. */
+    const gchar *pattern_options =
+        g_strcmp0(opt->pattern, "zone-plate") == 0 ? "kx2=20 ky2=20 kt=1" : "";
+
     gchar *description = g_strdup_printf(
         /* common part */
-        "videotestsrc name=video_source is-live=true pattern=%s "
+        "videotestsrc name=video_source is-live=true pattern=%s %s "
         "! video/x-raw,width=%d,height=%d,framerate=%d/1 "
         "! videoconvert name=source_convert "
         "! videobalance name=video_balance "
@@ -287,7 +292,7 @@ static gchar *build_pipeline_description(const Options *opt)
         "split. ! queue name=network_queue max-size-buffers=10 max-size-time=0 max-size-bytes=0 leaky=downstream "
         "! %s "
         "! udpsink name=network_sink host=%s port=%d sync=true",
-        opt->pattern, opt->width, opt->height, opt->fps,
+        opt->pattern, pattern_options, opt->width, opt->height, opt->fps,
         opt->names, names_valign, names_halign,
         opt->width, opt->height, opt->fps, info_valign,
         opt->width, opt->height, opt->fps,

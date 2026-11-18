@@ -72,7 +72,12 @@ fi
 
 RAW_CAPS="video/x-raw,format=I420,width=$WIDTH,height=$HEIGHT,framerate=$FPS/1"
 
-SOURCE_PART="videotestsrc name=video_source is-live=true pattern=$PATTERN num-buffers=$NUM_BUFFERS \
+# zone-plate needs its coefficients, with the default values (all 0) videotestsrc
+# only draws a uniform grey picture. kt=1 makes the rings move over time.
+PATTERN_OPTIONS=""
+[ "$PATTERN" = zone-plate ] && PATTERN_OPTIONS="kx2=20 ky2=20 kt=1"
+
+SOURCE_PART="videotestsrc name=video_source is-live=true pattern=$PATTERN $PATTERN_OPTIONS num-buffers=$NUM_BUFFERS \
  ! video/x-raw,width=$WIDTH,height=$HEIGHT,framerate=$FPS/1 \
  ! videoconvert name=source_convert \
  ! textoverlay name=names_overlay text=\"$TEAM_MEMBERS\" valignment=$NAMES_VALIGN halignment=$NAMES_HALIGN font-desc=\"Sans 14\" shaded-background=true \
