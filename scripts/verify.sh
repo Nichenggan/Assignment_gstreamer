@@ -27,6 +27,7 @@ mkdir -p "$ARTIFACTS_DIR" || exit 1
 : > "$VERIFICATION_LOG"
 
 RECEIVER_PID=""
+SENDER_PID=""
 
 # ------------------------------------------------------------------ helpers
 vlog() { log_info "$*"; echo "$(date '+%H:%M:%S') $*" >> "$VERIFICATION_LOG"; }
@@ -36,15 +37,22 @@ for name in $TEST_NAMES; do eval "RESULT_$name=FAIL"; done
 pass() { eval "RESULT_$1=PASS"; vlog "PASS $1${2:+ - $2}"; }
 fail() { eval "RESULT_$1=FAIL"; vlog "FAIL $1${2:+ - $2}"; }
 
+# stops everything this script started that is still running (receiver.sh with its
+# timeout and gst-launch children, the sender with its timeout wrapper)
 cleanup() {
-    if [ -n "$RECEIVER_PID" ] && kill -0 "$RECEIVER_PID" 2>/dev/null; then
-        vlog "stopping receiver (pid $RECEIVER_PID)"
-        kill "$RECEIVER_PID" 2>/dev/null
-        wait "$RECEIVER_PID" 2>/dev/null
-    fi
+    local name pid
+    for name in SENDER RECEIVER; do
+        eval "pid=\$${name}_PID"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            vlog "stopping $name process tree (pid $pid)"
+            kill_process_tree "$pid"
+        fi
+        eval "${name}_PID="
+    done
 }
 trap cleanup EXIT
-trap 'vlog "interrupted"; exit 130' INT TERM
+# on Ctrl+C: stop the children, write a FAIL summary (tests not run stay FAIL), exit 130
+trap 'vlog "interrupted, stopping started processes"; cleanup; write_summary > /dev/null; exit 130' INT TERM
 
 write_summary() {
     local overall=PASS name value
@@ -125,7 +133,7 @@ else
 fi
 
 # ------------------------------------------------------------------ 2. command line
-if timeout 10s "$SENDER_CMD" --help >> "$VERIFICATION_LOG" 2>&1; then
+if timeout -k 3s 10s "$SENDER_CMD" --help >> "$VERIFICATION_LOG" 2>&1; then
     pass HELP_OPTION "monitor_sender --help returns 0"
 else
     fail HELP_OPTION "monitor_sender --help failed"
@@ -144,15 +152,27 @@ for invalid_args in \
     "$VALID_ARGS --output $ARTIFACTS_DIR/x.avi" \
     "$VALID_ARGS --output $ARTIFACTS_DIR/x.mkv --unknown-option"; do
     # shellcheck disable=SC2086
-    timeout 10s "$SENDER_CMD" --headless --duration 1 $invalid_args >> "$VERIFICATION_LOG" 2>&1
+    timeout -k 3s 10s "$SENDER_CMD" --headless --duration 1 $invalid_args >> "$VERIFICATION_LOG" 2>&1
     status=$?
-    if [ $status -eq 0 ] || [ $status -eq 124 ]; then
-        vlog "'$invalid_args' was not rejected (exit code $status)"
+    # monitor_sender returns exactly 2 for a command-line error. Any other code is a
+    # failure: 0 = accepted, 124/137 = timeout, 126/127 = could not run, >128 = crash
+    if [ $status -ne 2 ]; then
+        case $status in
+            0)       reason="accepted" ;;
+            124|137) reason="timeout" ;;
+            126|127) reason="could not be executed" ;;
+            *)       if [ $status -gt 128 ]; then reason="crashed (signal $((status - 128)))"; else reason="wrong exit code"; fi ;;
+        esac
+        vlog "'$invalid_args' -> exit code $status ($reason), expected 2"
         INVALID_OK=0
     fi
 done
 rm -f "$ARTIFACTS_DIR/x.mkv" "$ARTIFACTS_DIR/x.avi"
-[ $INVALID_OK -eq 1 ] && pass INVALID_ARGUMENTS "8 bad command lines give a non-zero exit code" || fail INVALID_ARGUMENTS
+if [ $INVALID_OK -eq 1 ]; then
+    pass INVALID_ARGUMENTS "8 bad command lines rejected with exit code 2"
+else
+    fail INVALID_ARGUMENTS "at least one bad command line did not give exit code 2"
+fi
 
 # ------------------------------------------------------------------ 3. receiver + sender
 FRAMES_EXPECTED=$((FPS * 3))
@@ -168,14 +188,18 @@ fi
 
 vlog "starting sender (headless, ${VERIFY_DURATION}s) -> $RECORDING_FILE"
 SENDER_START_TIME=$(date +%s)
-# Normal stop = --duration (EOS sent from inside monitor_sender). The timeout is only
-# a watchdog: SIGINT (works on Linux, not delivered to native programs in Git Bash,
-# see debug-report.md), then SIGKILL 5s later. If it acts, EOS/clean tests fail.
+# Normal stop = --duration (EOS sent from inside monitor_sender). The sender runs in
+# the background so the INT/TERM trap can stop it; wait_with_deadline is only a
+# watchdog: after SENDER_TIMEOUT it kills the sender (no EOS), and then the EOS and
+# clean-termination tests fail.
 # shellcheck disable=SC2086
-timeout -s INT -k 5s "${SENDER_TIMEOUT}s" "$SENDER_CMD" $VALID_ARGS --output "$RECORDING_FILE" \
+"$SENDER_CMD" $VALID_ARGS --output "$RECORDING_FILE" \
     --duration "$VERIFY_DURATION" --headless --codec "$NETWORK_CODEC" \
-    --overlay-position "$OVERLAY_POSITION" --names "$TEAM_MEMBERS" > "$SENDER_LOG" 2>&1
+    --overlay-position "$OVERLAY_POSITION" --names "$TEAM_MEMBERS" > "$SENDER_LOG" 2>&1 &
+SENDER_PID=$!
+wait_with_deadline "$SENDER_PID" "$SENDER_TIMEOUT"
 SENDER_STATUS=$?
+SENDER_PID=""
 SENDER_ELAPSED=$(( $(date +%s) - SENDER_START_TIME ))
 vlog "sender finished with exit code $SENDER_STATUS after ${SENDER_ELAPSED}s"
 
@@ -203,14 +227,16 @@ if [ $SENDER_STATUS -eq 0 ] && grep -q "^EXIT code=0" "$SENDER_LOG"; then
     CLEAN_SENDER=1
 else
     CLEAN_SENDER=0
-    [ $SENDER_STATUS -eq 124 ] || [ $SENDER_STATUS -eq 137 ] && vlog "sender TIMEOUT after ${SENDER_TIMEOUT}s"
+    [ $SENDER_STATUS -eq 124 ] && vlog "sender TIMEOUT: still running after ${SENDER_TIMEOUT}s, killed"
 fi
 
 # ------------------------------------------------------------------ 4. results
 vlog "waiting for the receiver to finish"
-wait "$RECEIVER_PID"
+# receiver.sh has its own timeout; this deadline is a second safety net
+wait_with_deadline "$RECEIVER_PID" "$((RECEIVER_TIMEOUT + 10))"
 RECEIVER_STATUS=$?
 RECEIVER_PID=""
+[ $RECEIVER_STATUS -eq 124 ] && vlog "receiver TIMEOUT: killed after $((RECEIVER_TIMEOUT + 10))s"
 FRAMES_DECODED=$(grep -c "last-message = chain" "$RECEIVER_LOG")
 if [ $RECEIVER_STATUS -eq 0 ] && [ "$FRAMES_DECODED" -gt 0 ]; then
     pass RTP_RECEPTION "$FRAMES_DECODED decoded frames seen by the fakesink"
@@ -225,15 +251,22 @@ else
 fi
 
 # a non-empty file is not enough: it must be discoverable AND fully decodable
-DISCOVERER_OUTPUT=$(timeout 20s gst-discoverer-1.0 "$RECORDING_FILE" 2>&1)
+DISCOVERER_OUTPUT=$(timeout -k 5s 20s gst-discoverer-1.0 "$RECORDING_FILE" 2>&1)
 echo "$DISCOVERER_OUTPUT" >> "$VERIFICATION_LOG"
 # "Duration: 0:00:12.000000000" -> 12
 RECORDED_SECONDS=$(echo "$DISCOVERER_OUTPUT" | sed -n 's/^ *Duration: \([0-9]*\):\([0-9]*\):\([0-9]*\).*/\1 \2 \3/p' | head -1 \
     | awk '{ print $1 * 3600 + $2 * 60 + $3 }')
 vlog "recording duration according to gst-discoverer: ${RECORDED_SECONDS:-?}s (expected ~${VERIFY_DURATION}s)"
+# full decode through a fakesink; background + deadline so its gst-launch child is
+# also killed if it hangs (timeout on the bash wrapper would not reach it on Windows)
+bash scripts/play-recording.sh --headless "$RECORDING_FILE" >> "$VERIFICATION_LOG" 2>&1 &
+PLAYBACK_PID=$!
+wait_with_deadline "$PLAYBACK_PID" 30
+PLAYBACK_STATUS=$?
+[ $PLAYBACK_STATUS -eq 124 ] && vlog "playback TIMEOUT after 30s, killed"
 if echo "$DISCOVERER_OUTPUT" | grep -q "H.264" \
    && [ "${RECORDED_SECONDS:-0}" -ge $((VERIFY_DURATION - 2)) ] \
-   && timeout 30s bash scripts/play-recording.sh --headless "$RECORDING_FILE" >> "$VERIFICATION_LOG" 2>&1; then
+   && [ $PLAYBACK_STATUS -eq 0 ]; then
     pass RECORDING_DECODABLE "$(echo "$DISCOVERER_OUTPUT" | grep -m1 Duration | sed 's/^ *//')"
 else
     fail RECORDING_DECODABLE "gst-discoverer / decode failed, see $VERIFICATION_LOG"
