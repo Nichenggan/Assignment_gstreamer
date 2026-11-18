@@ -3,15 +3,17 @@
 ## Quick evaluation
 
 ```bash
-git clone <repository>
-cd <repository>
+git clone https://github.com/Nichenggan/Assignment_gstreamer.git
+cd Assignment_gstreamer
 ./scripts/clean.sh
 ./scripts/build.sh
 ./scripts/verify.sh
 ```
 
 `verify.sh` prints a PASS/FAIL summary and writes it to `artifacts/verification-summary.txt`.
-> Update 11 November : The script is been verified in the Codespace.
+
+The verification sequence has been run in the supplied Codespace.
+
 ## Team
 
 - Nikola MILOSAVLJEVIC
@@ -143,7 +145,7 @@ artifacts/
 - A truncated recording (MPEG-TS, and also Matroska) can still be partly decoded, so
   `verify.sh` also checks the duration reported by `gst-discoverer-1.0`, not only that
   it decodes.
-- Developed and tested on Windows 11 (Git Bash, GStreamer 1.28.8 MSVC). The scripts also
-  support Linux/Codespaces, but we did not run them there ourselves.
+- Developed and tested on Windows 11 (Git Bash, GStreamer 1.28.8 MSVC). The automated
+  verification sequence has also passed in the supplied Codespace.
 - `scripts/run-experiment.sh` returns exit code 1 if any run is invalid and then does not
   overwrite `evidence/measurements.csv`.

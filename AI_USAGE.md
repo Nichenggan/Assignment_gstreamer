@@ -12,11 +12,16 @@ that an AI conversation or an individual test took place when no record is avail
 
 ## Tools and team members
 
-The development tools reported by the team are **Gemini (web version)** and
-**ChatGPT**. The team consists of Nikola MILOSAVLJEVIC, Chenyi LI and Amirhossein
-POUYANFAR. The tools were used at team level for script details and joint debugging;
-individual tool-to-member session records and model versions were not supplied.
-Each member must confirm their own use before final submission.
+The development tools and users reported by the team are:
+
+| Team member | AI tool used |
+|---|---|
+| Nikola MILOSAVLJEVIC | Claude |
+| Chenyi LI | ChatGPT |
+| Amirhossein POUYANFAR | Gemini (web version) |
+
+The tools assisted with script details and debugging. Model versions and individual
+conversation transcripts were not retained.
 
 A subsequent repository audit and preparation of this disclosure used **OpenAI
 Codex**, at Chenyi LI's request. This assistance covered static source/document
@@ -76,8 +81,8 @@ for a correct usage error. The current script requires the application's documen
 usage-error status (2). This change was also checked in the source only.
 
 These are observed limitations of the AI-assisted implementation, not invented
-quotations from an AI response. A historical AI-response example still needs the
-team's confirmation if the teacher requires direct attribution to a response.
+quotations from an AI response. The original AI conversation transcripts were not
+retained, so the team cannot attribute these errors to a verbatim AI response.
 
 ## Validation evidence and final tests
 

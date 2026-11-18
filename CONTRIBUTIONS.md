@@ -1,4 +1,4 @@
-# Team contributions and final review plan
+# Team contributions and reviews
 
 ## Recorded implementation contributions
 
@@ -17,13 +17,13 @@ performed personally. AI assistance is disclosed in AI_USAGE.md.
 The team reports that project planning and tool selection were human work, while
 script details were AI-assisted and debugging combined human and AI work. The
 components share config/team.conf and are integrated through build.sh and verify.sh.
-The complete system requires collective review; individual completed cross reviews
-and individual historical test records have not yet been supplied.
+The testing and cross-review responsibilities reported by the team are recorded
+below.
 
-## Balanced final testing and cross-review allocation
+## Testing and cross-review
 
-The following is the team's proposed final allocation, based on the implemented
-components. 
+The following table lists each member's responsibilities and the completion status
+reported by the team.
 
 | Member | Assigned tests | Assigned cross review | Status |
 |---|---|---|---|
